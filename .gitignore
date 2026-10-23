@@ -1,0 +1,14 @@
+# Compiled Java artifacts
+*.class
+
+# Build output
+build/
+out/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+
+# Local logs
+*.log
