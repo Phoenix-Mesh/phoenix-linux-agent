@@ -45,6 +45,18 @@ public class LinuxNodeAgent {
     private volatile double lastHeartbeatRttMs =
             0.0;
 
+    // Protocol features announced to Phoenix Core at registration.
+    //
+    // "attempt-id": this agent receives the opaque attemptId Core sends with
+    // each task and echoes it back verbatim. Core uses that to fence late or
+    // duplicate reports from an earlier attempt of the same task. An agent
+    // that does not announce it is treated by Core as LEGACY (unfenced).
+    //
+    // Only announce a feature this class really implements: Core starts
+    // sending attemptId/attemptNumber to this node as soon as it is announced.
+    private static final String PROTOCOL_FEATURES =
+            "[\"attempt-id\"]";
+
     // ADDED: Explicit heuristic energy-cost estimate.
     //
     // This is intentionally a heuristic and not a claim of instantaneous
@@ -129,9 +141,24 @@ public class LinuxNodeAgent {
         long samples =
                 extractLong(body, "samples", 2_000_000);
 
+        // Attempt identity (only sent by Core to nodes that announced
+        // "attempt-id"). Kept in its raw, still JSON-escaped form so it can
+        // be echoed back verbatim, as the protocol requires. Empty when the
+        // Core is older than this agent and sends none.
+        String attemptId =
+                extractRawString(body, "attemptId");
+
+        // Informational only (logs); never used to identify an attempt.
+        long attemptNumber =
+                extractLong(body, "attemptNumber", -1);
+
         System.out.printf(
-                "[LinuxNodeAgent] Received task %s, executing Monte-Carlo (samples=%d)...%n",
+                "[LinuxNodeAgent] Received task %s%s, executing Monte-Carlo (samples=%d)...%n",
                 taskId,
+                attemptId.isEmpty()
+                        ? ""
+                        : " (attempt " + attemptNumber
+                                + ", id " + shortId(attemptId) + ")",
                 samples
         );
 
@@ -169,11 +196,19 @@ public class LinuxNodeAgent {
                     elapsedMs
             );
 
+            // Echo the attempt id verbatim. For this push transport the
+            // result is the response to the very request that carried the
+            // task, so the echo is not needed for fencing; it keeps the
+            // agent's behaviour uniform with the pull agents and makes the
+            // attempt visible in traces.
             String response =
                     "{\"status\":\"SUCCESS\",\"outputData\":\""
                             + escape(output)
                             + "\",\"executionTimeMs\":"
                             + elapsedMs
+                            + (attemptId.isEmpty()
+                                    ? ""
+                                    : ",\"attemptId\":\"" + attemptId + "\"")
                             + "}";
 
             byte[] bytes =
@@ -213,6 +248,7 @@ public class LinuxNodeAgent {
                 + "\"memoryMb\":" + totalMemoryMb() + ","
                 + "\"adapterType\":\"linux\","
                 + "\"capabilities\":[],"
+                + "\"protocolFeatures\":" + PROTOCOL_FEATURES + ","
                 + "\"callbackPort\":" + callbackPort
                 + "}";
 
@@ -580,6 +616,35 @@ public class LinuxNodeAgent {
         return m.find()
                 ? m.group(1)
                 : "";
+    }
+
+    /**
+     * Like {@link #extractString}, but understands JSON escapes and returns
+     * the value exactly as it appears between the quotes (still escaped), so
+     * it can be written back into a JSON string unchanged.
+     */
+    private static String extractRawString(
+            String json,
+            String key) {
+
+        var m =
+                Pattern.compile(
+                        "\"" + key
+                                + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\""
+                )
+                .matcher(json);
+
+        return m.find()
+                ? m.group(1)
+                : "";
+    }
+
+    /** First 8 characters, for log lines only. */
+    private static String shortId(String id) {
+
+        return id.length() <= 8
+                ? id
+                : id.substring(0, 8);
     }
 
     private static long extractLong(

@@ -1,4 +1,4 @@
-# Phoenix Linux Node Agent v0.2
+# Phoenix Linux Node Agent v0.2.1
 
 Standalone Linux node agent for the Phoenix HTTP node-agent milestone.
 
@@ -19,7 +19,13 @@ com/
 `LinuxNodeAgent.java` is the source implementation.
 
 `LinuxNodeAgent.class` is the compiled class included in this milestone
-artifact so the agent can be launched directly without recompiling.
+artifact so the agent can be launched directly without recompiling. It is
+compiled for Java 11 and newer. **If you edit the source, recompile it** (a
+stale `.class` keeps running the old behaviour):
+
+```bash
+javac --release 11 com/phoenix/linuxagent/LinuxNodeAgent.java
+```
 
 ## Requirements
 
@@ -91,6 +97,7 @@ The agent reports information including:
 - total memory
 - adapter type: `linux`
 - callback port
+- protocol features: `["attempt-id"]` (see below)
 
 ### Heartbeat
 
@@ -137,8 +144,41 @@ The response contains:
 {
   "status": "SUCCESS",
   "outputData": "Computed Monte-Carlo pi ~= ...",
-  "executionTimeMs": 123
+  "executionTimeMs": 123,
+  "attemptId": "..."
 }
+```
+
+### Attempt identity (`attempt-id`)
+
+The agent announces the `attempt-id` protocol feature when it registers. Phoenix
+Core then treats it as a fenced node and sends an opaque `attemptId` (plus an
+informational `attemptNumber`) with every pushed task:
+
+```json
+{ "taskId": "task-001", "type": "Monte-Carlo-Pi", "samples": 2000000,
+  "attemptId": "3f6c1b7e-9a1d-4c52-8a0e-5d2b7f61c9aa", "attemptNumber": 2 }
+```
+
+The agent echoes `attemptId` back **verbatim** in the response (and leaves it out
+if Core did not send one, so it still works against an older Core). It never
+interprets the id, and it does not use `attemptNumber` for anything except
+logging. For this push transport the result is the response to the very request
+that carried the task, so Core fences it by the connection itself; the echo keeps
+the agent consistent with the pull agents.
+
+An agent that does not announce `attempt-id` is registered as `LEGACY` and Core
+logs a warning for it. To confirm this agent is recognised, look for this line in
+the Core's events after the agent registers:
+
+```text
+[RegistrationServer] Node <nodeId> announced attempt-id: late results will be fenced by attempt id
+```
+
+and, when a task is placed on it:
+
+```text
+[Lifecycle] task-001 ACCEPTED (attempt 1, id xxxxxxxx, fencing ENFORCED)
 ```
 
 ## Persistent device identity
@@ -160,7 +200,7 @@ A normal run will look roughly like:
 [LinuxNodeAgent] Registered: ...
 [LinuxNodeAgent] Running, listening for pushed tasks on port 9090.
 [LinuxNodeAgent] Heartbeat sent: cpu=... freeRam=... activeTasks=... rtt=... energy=...
-[LinuxNodeAgent] Received task ..., executing Monte-Carlo (samples=2000000)...
+[LinuxNodeAgent] Received task ... (attempt 1, id xxxxxxxx), executing Monte-Carlo (samples=2000000)...
 [LinuxNodeAgent] Task ... done: Computed Monte-Carlo pi ~= ... (...ms)
 ```
 
@@ -218,5 +258,7 @@ to stop it.
 Phoenix HTTP Node-Agent:
 
 ```text
-v0.2
+v0.2.1
 ```
+
+v0.2.1 adds `attempt-id` support (announce at registration, echo `attemptId`).
