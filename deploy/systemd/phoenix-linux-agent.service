@@ -1,0 +1,53 @@
+# Phoenix Linux Node Agent over MQTT/TLS, as a systemd service.
+#
+# Install (as root; see docs/mqtt-tls.md for the broker account):
+#   useradd --system --home-dir /var/lib/phoenix-linux-agent --shell /usr/sbin/nologin phoenix
+#   install -d -m 0755 /opt/phoenix-linux-agent
+#   install -m 0644 phoenix-linux-agent-v0.3.0.jar /opt/phoenix-linux-agent/phoenix-linux-agent.jar
+#   install -d -m 0750 -g phoenix /etc/phoenix-linux-agent
+#   install -m 0644 ca.pem /etc/phoenix-linux-agent/ca.pem
+#   install -m 0640 -g phoenix broker-password /etc/phoenix-linux-agent/broker-password
+#   install -m 0640 -g phoenix enrollment-token /etc/phoenix-linux-agent/enrollment-token
+#   cp phoenix-linux-agent.service /etc/systemd/system/
+#   # set --broker below, then:
+#   systemctl daemon-reload && systemctl enable --now phoenix-linux-agent
+#
+# The device id is kept in /var/lib/phoenix-linux-agent/device-id. Print it
+# (it is the broker user name) before creating the broker account:
+#   sudo -u phoenix java -jar /opt/phoenix-linux-agent/phoenix-linux-agent.jar \
+#       --print-device-id --device-id-file /var/lib/phoenix-linux-agent/device-id
+
+[Unit]
+Description=Phoenix Linux Node Agent (MQTT/TLS)
+Documentation=https://github.com/Phoenix-Mesh/phoenix-linux-agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=phoenix
+Group=phoenix
+StateDirectory=phoenix-linux-agent
+
+# REQUIRED BEFORE STARTING: replace broker.lan below with the real broker
+# hostname or IP address. Ensure it matches the broker certificate's SAN.
+ExecStart=/usr/bin/java -Xmx128m -jar /opt/phoenix-linux-agent/phoenix-linux-agent.jar \
+    --broker broker.lan:8883 \
+    --ca /etc/phoenix-linux-agent/ca.pem \
+    --password-file /etc/phoenix-linux-agent/broker-password \
+    --enrollment-token-file /etc/phoenix-linux-agent/enrollment-token \
+    --device-id-file /var/lib/phoenix-linux-agent/device-id
+# Exit code 1: refused credentials, untrusted broker or refused registration.
+# Retrying slowly lets a fixed broker account or Core configuration take effect.
+Restart=on-failure
+RestartSec=30
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/phoenix-linux-agent
+
+[Install]
+WantedBy=multi-user.target

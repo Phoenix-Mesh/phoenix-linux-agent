@@ -1,9 +1,12 @@
 # Compiled Java artifacts
 *.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
 
 # Build output
 build/
 out/
+.gradle/
 
 # IDE and editor files
 .idea/

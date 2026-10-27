@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          add-job-summary: on-failure
+
+      # The MQTT integration tests start a real broker; without it they are skipped.
+      - name: Install Mosquitto
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mosquitto
+          sudo systemctl stop mosquitto || true
+
+      - name: Build
+        run: ./gradlew --no-daemon --console=plain clean build
+
+      # The jar targets Java 11: prove it starts there.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Run the jar on Java 11
+        run: |
+          java -version
+          java -jar build/libs/phoenix-linux-agent-v*.jar --version
+          java -jar build/libs/phoenix-linux-agent-v*.jar --print-device-id --device-id-file "$RUNNER_TEMP/device-id"
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
+          retention-days: 14
+
+      - name: Upload jar
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: phoenix-linux-agent
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 14
