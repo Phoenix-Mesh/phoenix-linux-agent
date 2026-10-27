@@ -1,264 +1,104 @@
-# Phoenix Linux Node Agent v0.2.1
+# Phoenix Linux Node Agent
 
-Standalone Linux node agent for the Phoenix HTTP node-agent milestone.
+The Linux node agent for [Phoenix](https://github.com/Phoenix-Mesh/phoenix), a
+lightweight orchestrator for heterogeneous edge devices.
 
-The agent connects to a running Phoenix Core instance over HTTP, registers the
-Linux machine as an edge node, sends periodic telemetry/heartbeat updates, and
-accepts pushed tasks from Phoenix Core.
+The agent turns a Linux machine into a Phoenix edge node. It registers the
+machine with Phoenix Core, reports its resources every five seconds, and
+executes the tasks Core pushes to it. Placement, health, timeouts and retries
+are decided by Core; the agent only reports and executes.
 
-## Contents
+## Quick start
+
+1. Start Phoenix Core on the control machine (see the
+   [Core README](https://github.com/Phoenix-Mesh/phoenix#running-the-core)).
+2. Download `phoenix-linux-agent-<version>.jar` from the
+   [latest release](https://github.com/Phoenix-Mesh/phoenix-linux-agent/releases/latest),
+   or [build it](#building-from-source).
+3. Run it on the Linux machine with Core's address and a free port for Core to
+   call back on:
+
+    ```bash
+    java -jar phoenix-linux-agent-v0.2.1.jar http://192.0.2.10:8080 9090
+    ```
+
+4. The machine appears in the **NODES** panel of the Core console. Press `D`
+   there to dispatch a task; it runs on this machine.
+
+## Usage
 
 ```text
-com/
-└── phoenix/
-    └── linuxagent/
-        ├── LinuxNodeAgent.java
-        └── LinuxNodeAgent.class
+java -jar phoenix-linux-agent-<version>.jar [CORE_URL] [CALLBACK_PORT]
 ```
 
-`LinuxNodeAgent.java` is the source implementation.
+| Argument        | Meaning                                                                | Default                 |
+| --------------- | ---------------------------------------------------------------------- | ----------------------- |
+| `CORE_URL`      | Address of Phoenix Core's HTTP gateway, as reachable from this machine | `http://127.0.0.1:8080` |
+| `CALLBACK_PORT` | Port this agent listens on for tasks pushed by Core                    | `9090`                  |
 
-`LinuxNodeAgent.class` is the compiled class included in this milestone
-artifact so the agent can be launched directly without recompiling. It is
-compiled for Java 11 and newer. **If you edit the source, recompile it** (a
-stale `.class` keeps running the old behaviour):
+Start Core first. The agent registers once at startup; see
+[known limitations](#known-limitations).
+
+Stop the agent with `Ctrl+C`.
+
+## Network requirements
+
+Both directions must work:
+
+- **Agent → Core:** this machine reaches `CORE_URL` (Core's port, normally `8080`).
+- **Core → agent:** Core reaches this machine on `CALLBACK_PORT` (normally `9090`).
+  Core uses the source address of the registration request together with the
+  announced callback port, so register over the interface Core can reach.
+
+Allow the callback port through the firewall, for example
+`sudo ufw allow 9090/tcp`. Do not use `127.0.0.1` as `CORE_URL` when Core runs
+on another machine.
+
+## What the agent does
+
+On startup it:
+
+1. starts its callback server on `CALLBACK_PORT` (`POST /execute`);
+2. registers with Core (`POST /register`);
+3. sends a heartbeat every 5 seconds (`POST /heartbeat`);
+4. executes each task Core pushes and returns the result in the same response.
+
+The wire format is specified in Core's
+[push agent protocol](https://github.com/Phoenix-Mesh/phoenix/blob/main/docs/linux-agent-protocol.md).
+
+## Known limitations
+
+- **Start Core first.** Registration happens once at startup. If Core is not
+  reachable then, the agent prints the error but keeps running without
+  registering; stop it and start it again.
+- **Restart the agent after restarting Core.** The agent does not re-register,
+  so after a Core restart its heartbeats are refused (`unknown_device`).
+- **No authentication.** The callback endpoint accepts tasks from anyone who
+  can reach the port, over plain HTTP. Use it on a trusted LAN only.
+- **One task at a time.** Pushed tasks are executed one after another.
+- **One workload.** Every task runs Monte-Carlo π; the task type is not checked,
+  and every completed task reports `SUCCESS`.
+- Energy cost is a fixed heuristic, not a hardware measurement.
+
+## Building from source
+
+Requires a JDK 11 or newer. From the repository root:
 
 ```bash
-javac --release 11 com/phoenix/linuxagent/LinuxNodeAgent.java
+javac --release 11 -d build/classes com/phoenix/linuxagent/LinuxNodeAgent.java
+jar --create --file build/phoenix-linux-agent.jar \
+    --main-class com.phoenix.linuxagent.LinuxNodeAgent -C build/classes .
+java -jar build/phoenix-linux-agent.jar http://192.0.2.10:8080 9090
 ```
 
-## Requirements
-
-- Linux system
-- Java runtime capable of running the compiled agent
-- Network connectivity to the Phoenix Core
-- Phoenix Core HTTP server running and reachable
-
-The agent reads Linux resource information from:
-
-- `/proc/stat` for CPU utilization
-- `/proc/meminfo` for memory information
-
-## Running the agent
-
-From the directory containing the `com/` directory:
+Or run the source file directly, without a separate build step:
 
 ```bash
-java -cp . com.phoenix.linuxagent.LinuxNodeAgent \
-    http://<PHOENIX_CORE_IP>:8080 \
-    9090
+java com/phoenix/linuxagent/LinuxNodeAgent.java http://192.0.2.10:8080 9090
 ```
 
-For example:
-
-```bash
-java -cp . com.phoenix.linuxagent.LinuxNodeAgent \
-    http://10.62.95.63:8080 \
-    9090
-```
-
-The arguments are:
-
-```text
-1. Phoenix Core URL
-2. Callback port
-```
-
-Both arguments are optional.
-
-Defaults:
-
-```text
-Core URL:    http://127.0.0.1:8080
-Callback:    9090
-```
-
-The callback port must be reachable by Phoenix Core because the Core uses the
-agent's callback endpoint to push work.
-
-## HTTP behavior
-
-On startup, the agent:
-
-1. Starts its local HTTP callback server.
-2. Registers with Phoenix Core using `POST /register`.
-3. Begins sending heartbeats every 5 seconds.
-4. Waits for pushed tasks on `POST /execute`.
-
-### Registration
-
-The agent reports information including:
-
-- persistent device ID
-- hostname
-- hardware class: `LINUX`
-- architecture
-- CPU core count
-- total memory
-- adapter type: `linux`
-- callback port
-- protocol features: `["attempt-id"]` (see below)
-
-### Heartbeat
-
-Every 5 seconds, the agent reports telemetry including:
-
-- CPU utilization
-- available RAM
-- active task count
-- queue length
-- measured HTTP round-trip time
-- energy-cost estimate
-
-The energy value is an explicit heuristic estimate, not a measurement of
-instantaneous physical power consumption.
-
-### Task execution
-
-Phoenix Core pushes a task to:
-
-```text
-POST /execute
-```
-
-The current agent executes the demonstrated Monte-Carlo workload.
-
-Task parameters include:
-
-```json
-{
-  "taskId": "...",
-  "samples": 2000000
-}
-```
-
-If `samples` is omitted, the agent defaults to:
-
-```text
-2,000,000 samples
-```
-
-The response contains:
-
-```json
-{
-  "status": "SUCCESS",
-  "outputData": "Computed Monte-Carlo pi ~= ...",
-  "executionTimeMs": 123,
-  "attemptId": "..."
-}
-```
-
-### Attempt identity (`attempt-id`)
-
-The agent announces the `attempt-id` protocol feature when it registers. Phoenix
-Core then treats it as a fenced node and sends an opaque `attemptId` (plus an
-informational `attemptNumber`) with every pushed task:
-
-```json
-{ "taskId": "task-001", "type": "Monte-Carlo-Pi", "samples": 2000000,
-  "attemptId": "3f6c1b7e-9a1d-4c52-8a0e-5d2b7f61c9aa", "attemptNumber": 2 }
-```
-
-The agent echoes `attemptId` back **verbatim** in the response (and leaves it out
-if Core did not send one, so it still works against an older Core). It never
-interprets the id, and it does not use `attemptNumber` for anything except
-logging. For this push transport the result is the response to the very request
-that carried the task, so Core fences it by the connection itself; the echo keeps
-the agent consistent with the pull agents.
-
-An agent that does not announce `attempt-id` is registered as `LEGACY` and Core
-logs a warning for it. To confirm this agent is recognised, look for this line in
-the Core's events after the agent registers:
-
-```text
-[RegistrationServer] Node <nodeId> announced attempt-id: late results will be fenced by attempt id
-```
-
-and, when a task is placed on it:
-
-```text
-[Lifecycle] task-001 ACCEPTED (attempt 1, id xxxxxxxx, fencing ENFORCED)
-```
-
-## Persistent device identity
-
-The Linux agent creates and persists its device identity at:
-
-```text
-~/.phoenix_linux_device_id
-```
-
-This allows the same Linux machine to retain the same Phoenix device ID
-across agent restarts.
-
-## Example console output
-
-A normal run will look roughly like:
-
-```text
-[LinuxNodeAgent] Registered: ...
-[LinuxNodeAgent] Running, listening for pushed tasks on port 9090.
-[LinuxNodeAgent] Heartbeat sent: cpu=... freeRam=... activeTasks=... rtt=... energy=...
-[LinuxNodeAgent] Received task ... (attempt 1, id xxxxxxxx), executing Monte-Carlo (samples=2000000)...
-[LinuxNodeAgent] Task ... done: Computed Monte-Carlo pi ~= ... (...ms)
-```
-
-## Network considerations
-
-The Core URL is the address from the Linux agent to Phoenix Core.
-
-The callback port is the address Phoenix Core uses to reach the Linux agent.
-
-For a LAN deployment, make sure:
-
-- the Linux machine can reach the Core port (normally `8080`);
-- the Core can reach the Linux callback port (normally `9090`);
-- firewall rules permit the required traffic;
-- the callback address/port advertised to Phoenix is actually reachable.
-
-Do not use `127.0.0.1` for the Core URL when Phoenix Core is running on a
-different machine.
-
-## Current milestone scope
-
-This artifact represents the Linux side of the Phoenix HTTP node-agent
-experimental milestone.
-
-Current demonstrated workload:
-
-- Monte-Carlo computation
-
-Current transport:
-
-- HTTP
-
-Current limitations:
-
-- no MQTT transport
-- no TLS
-- local/LAN deployment assumptions
-- energy cost is heuristic rather than hardware-measured
-- task execution currently targets the demonstrated Monte-Carlo workload
-
-## Stopping the agent
-
-The agent runs continuously until the process is terminated.
-
-Use:
-
-```text
-Ctrl+C
-```
-
-to stop it.
-
-## Version
-
-Phoenix HTTP Node-Agent:
-
-```text
-v0.2.1
-```
-
-v0.2.1 adds `attempt-id` support (announce at registration, echo `attemptId`).
+## Related repositories
+
+- [Phoenix Core](https://github.com/Phoenix-Mesh/phoenix): the orchestrator.
+- [Phoenix Android Agent](https://github.com/Phoenix-Mesh/phoenix-android-agent):
+  the Android node agent.
