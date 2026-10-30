@@ -231,3 +231,8 @@ docs/                         setup guide and validation runbook
 - [Phoenix Core](https://github.com/Phoenix-Mesh/phoenix): the orchestrator.
 - [Phoenix Android Agent](https://github.com/Phoenix-Mesh/phoenix-android-agent):
   the Android node agent.
+
+## License
+
+This project is licensed under the
+[Apache License, Version 2.0](LICENSE).
