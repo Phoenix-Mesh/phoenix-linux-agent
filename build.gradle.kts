@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import java.time.Duration
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 
