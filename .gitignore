@@ -4,6 +4,7 @@
 !gradle/wrapper/gradle-wrapper.jar
 
 # Build output
+/bin/
 build/
 out/
 .gradle/
