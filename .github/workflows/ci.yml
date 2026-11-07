@@ -18,6 +18,7 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v7
 
@@ -31,23 +32,36 @@ jobs:
           cache-provider: basic
           add-job-summary: on-failure
 
-      # The MQTT integration tests start a real broker; without it they are skipped.
+      # Required by MQTT integration tests; without it those tests are skipped.
       - name: Install Mosquitto
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends mosquitto
           sudo systemctl stop mosquitto || true
 
-      - name: Build
+      # Ubuntu's packaged Mosquitto is confined by AppArmor.
+      # The integration tests need it to read JUnit's temporary config files.
+      - name: Configure Mosquitto for integration tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/phoenix-ci-bin"
+
+          cat > "$RUNNER_TEMP/phoenix-ci-bin/mosquitto" <<'EOF'
+          #!/usr/bin/env bash
+          exec /usr/bin/aa-exec -p unconfined -- /usr/sbin/mosquitto "$@"
+          EOF
+
+          chmod +x "$RUNNER_TEMP/phoenix-ci-bin/mosquitto"
+          echo "$RUNNER_TEMP/phoenix-ci-bin" >> "$GITHUB_PATH"
+
+      - name: Build and test
         run: ./gradlew --no-daemon --console=plain clean build
 
-      # The jar targets Java 11: prove it starts there.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "11"
 
-      - name: Run the jar on Java 11
+      - name: Verify Java 11 compatibility
         run: |
           java -version
           java -jar build/libs/phoenix-linux-agent-v*.jar --version
